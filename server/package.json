@@ -1,0 +1,21 @@
+{
+  "name": "nigraan-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "create-user": "node scripts/create-user.js",
+    "delete-user": "node scripts/delete-user.js",
+    "backup": "node scripts/backup.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}

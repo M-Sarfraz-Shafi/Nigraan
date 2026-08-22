@@ -1,0 +1,39 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Server database (self-hosted, not source) — covers data.db, its WAL/SHM
+# sidecar files, and any manual copies like "data - Copy.db"
+server/*.db
+server/*.db-*
+server/backups/
+
+# Build/type-check caches (regenerated on every build)
+*.tsbuildinfo
+
+# Env files (never commit secrets/config)
+.env
+.env.local
+.env.*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
