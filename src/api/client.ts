@@ -1,5 +1,17 @@
 import type { ProjectData } from "../domain/types";
-import type { AdminProjectSummary, AdminUser, CurrentUser, ProjectDetail, ProjectMember, ProjectSummary } from "./types";
+import type {
+  AdminProjectSummary,
+  AdminUser,
+  CurrentUser,
+  FocusList,
+  FocusListSummary,
+  FocusSearchResult,
+  ProjectDetail,
+  ProjectMember,
+  ProjectSummary,
+  ProjectTaskGroup,
+  Tag,
+} from "./types";
 
 class ApiError extends Error {
   status: number;
@@ -46,11 +58,39 @@ export const api = {
   saveProject: (id: string, data: ProjectData) =>
     request<{ ok: true; updatedAt: string }>(`/api/projects/${id}`, { method: "PUT", body: JSON.stringify({ data }) }),
   deleteProject: (id: string) => request<{ ok: true }>(`/api/projects/${id}`, { method: "DELETE" }),
+  updateProjectTags: (id: string, tags: string[]) =>
+    request<{ ok: true; tags: string[] }>(`/api/projects/${id}/tags`, { method: "PATCH", body: JSON.stringify({ tags }) }),
   addMember: (id: string, username: string, newAccount?: { password: string; displayName: string }) =>
     request<ProjectMember>(`/api/projects/${id}/members`, { method: "POST", body: JSON.stringify({ username, ...newAccount }) }),
   removeMember: (id: string, userId: string) => request<{ ok: true }>(`/api/projects/${id}/members/${userId}`, { method: "DELETE" }),
   promoteMember: (id: string, userId: string) => request<{ ok: true }>(`/api/projects/${id}/members/${userId}/promote`, { method: "POST" }),
   demoteMember: (id: string, userId: string) => request<{ ok: true }>(`/api/projects/${id}/members/${userId}/demote`, { method: "POST" }),
+
+  focus: {
+    today: (date?: string) => request<FocusList>(`/api/focus/today${date ? `?date=${date}` : ""}`),
+    listReleases: () => request<FocusListSummary[]>("/api/focus/lists"),
+    createRelease: (title: string, targetDate: string | null) =>
+      request<FocusList>("/api/focus/lists", { method: "POST", body: JSON.stringify({ title, targetDate }) }),
+    getList: (id: string) => request<FocusList>(`/api/focus/lists/${id}`),
+    updateRelease: (id: string, patch: { title?: string; targetDate?: string | null }) =>
+      request<FocusList>(`/api/focus/lists/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    deleteRelease: (id: string) => request<{ ok: true }>(`/api/focus/lists/${id}`, { method: "DELETE" }),
+    addItem: (listId: string, projectId: string, taskId: string) =>
+      request<FocusList>(`/api/focus/lists/${listId}/items`, { method: "POST", body: JSON.stringify({ projectId, taskId }) }),
+    removeItem: (listId: string, itemId: string) => request<FocusList>(`/api/focus/lists/${listId}/items/${itemId}`, { method: "DELETE" }),
+    reorder: (listId: string, itemIds: string[]) =>
+      request<FocusList>(`/api/focus/lists/${listId}/items/reorder`, { method: "POST", body: JSON.stringify({ itemIds }) }),
+    toggleDone: (listId: string, itemId: string) => request<FocusList>(`/api/focus/lists/${listId}/items/${itemId}/toggle-done`, { method: "POST" }),
+    searchTasks: (q: string) => request<FocusSearchResult[]>(`/api/focus/search-tasks?q=${encodeURIComponent(q)}`),
+    allTasks: () => request<ProjectTaskGroup[]>("/api/focus/all-tasks"),
+  },
+
+  tags: {
+    list: () => request<Tag[]>("/api/tags"),
+    create: (name: string, color: string) => request<Tag>("/api/tags", { method: "POST", body: JSON.stringify({ name, color }) }),
+    update: (id: string, patch: { name?: string; color?: string }) => request<Tag>(`/api/tags/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    delete: (id: string) => request<{ ok: true }>(`/api/tags/${id}`, { method: "DELETE" }),
+  },
 
   admin: {
     listUsers: () => request<AdminUser[]>("/api/admin/users"),

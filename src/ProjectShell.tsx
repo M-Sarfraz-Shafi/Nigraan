@@ -16,6 +16,7 @@ import { TimelineView } from "./views/TimelineView";
 import { TaskListView } from "./views/TaskListView";
 import { ResourceView } from "./views/ResourceView";
 import { BaselineView } from "./views/BaselineView";
+import { useTags } from "./store/useTags";
 
 type ViewId = "dashboard" | "timeline" | "tasks" | "resources" | "baselines";
 const VIEWS: { id: ViewId; label: string; icon: string }[] = [
@@ -29,6 +30,7 @@ const VIEWS: { id: ViewId; label: string; icon: string }[] = [
 export function ProjectShell({ projectId, user, onBack }: { projectId: string; user: CurrentUser; onBack: () => void }) {
   const {
     data,
+    project,
     role,
     members,
     presence,
@@ -49,6 +51,7 @@ export function ProjectShell({ projectId, user, onBack }: { projectId: string; u
     promoteMember,
     demoteMember,
   } = useRemoteProjectStore(projectId);
+  const { tags: allTags } = useTags();
   const [view, setView] = useState<ViewId>("dashboard");
   const [editT, setEditT] = useState<Task | null>(null);
   const [showSet, setShowSet] = useState(false);
@@ -172,6 +175,20 @@ export function ProjectShell({ projectId, user, onBack }: { projectId: string; u
             >
               Release: {fmtDate(releaseEnd)}
             </p>
+          )}
+          {(project?.tags ?? []).length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
+              {allTags
+                .filter((t) => (project?.tags ?? []).includes(t.id))
+                .map((t) => (
+                  <span
+                    key={t.id}
+                    style={{ fontSize: 10.5, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: t.color + "33", color: "#fff" }}
+                  >
+                    {t.name}
+                  </span>
+                ))}
+            </div>
           )}
           <div style={{ marginTop: 10 }}>
             <PresenceBar presence={presence} currentUserId={user.id} />

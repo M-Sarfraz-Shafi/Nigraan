@@ -168,21 +168,30 @@ app.get("/api/users", requireAuth, (_req, res) => {
 
 // ---- Projects ----
 
+function parseTags(raw) {
+  try {
+    const parsed = JSON.parse(raw || "[]");
+    return Array.isArray(parsed) ? parsed.filter((t) => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 app.get("/api/projects", requireAuth, (req, res) => {
   if (req.user.isAdmin) {
     // Admins see every project on the server without being a member of any of them.
-    const rows = db.prepare(`SELECT id, name, owner_id as ownerId, created_at as createdAt FROM projects ORDER BY created_at DESC`).all();
-    return res.json(rows.map((p) => ({ ...p, role: "admin" })));
+    const rows = db.prepare(`SELECT id, name, owner_id as ownerId, created_at as createdAt, tags FROM projects ORDER BY created_at DESC`).all();
+    return res.json(rows.map((p) => ({ ...p, tags: parseTags(p.tags), role: "admin" })));
   }
   const rows = db
     .prepare(
-      `SELECT p.id, p.name, p.owner_id as ownerId, p.created_at as createdAt, pm.is_po as isPo
+      `SELECT p.id, p.name, p.owner_id as ownerId, p.created_at as createdAt, p.tags, pm.is_po as isPo
        FROM projects p JOIN project_members pm ON pm.project_id = p.id
        WHERE pm.user_id = ?
        ORDER BY p.created_at DESC`,
     )
     .all(req.user.id);
-  const withRole = rows.map(({ isPo, ...p }) => ({ ...p, role: isPo ? "owner" : "member" }));
+  const withRole = rows.map(({ isPo, tags, ...p }) => ({ ...p, tags: parseTags(tags), role: isPo ? "owner" : "member" }));
   res.json(withRole);
 });
 
@@ -219,13 +228,28 @@ app.post("/api/projects", requireAuth, (req, res) => {
     ts,
     req.user.id,
   );
-  res.json({ id, name: name.trim(), ownerId: req.user.id, createdAt: ts, role: req.user.isAdmin ? "admin" : "owner" });
+  res.json({ id, name: name.trim(), ownerId: req.user.id, createdAt: ts, tags: [], role: req.user.isAdmin ? "admin" : "owner" });
+});
+
+// A project's tags are chosen from the shared `tags` list (see the /api/tags routes
+// below) — this just sets *which* of those a project has, so any unknown/deleted id is
+// silently dropped rather than trusted. Any member can assign tags, same access level
+// as editing the project's own data via PUT below.
+app.patch("/api/projects/:id/tags", requireAuth, (req, res) => {
+  const role = projectRole(req.params.id, req.user);
+  if (!role) return res.status(404).json({ error: "Project not found" });
+  const { tags } = req.body || {};
+  if (!Array.isArray(tags) || !tags.every((t) => typeof t === "string")) return res.status(400).json({ error: "tags must be an array of tag ids" });
+  const existingIds = new Set(db.prepare("SELECT id FROM tags").all().map((t) => t.id));
+  const cleaned = [...new Set(tags)].filter((id) => existingIds.has(id));
+  db.prepare("UPDATE projects SET tags = ? WHERE id = ?").run(JSON.stringify(cleaned), req.params.id);
+  res.json({ ok: true, tags: cleaned });
 });
 
 app.get("/api/projects/:id", requireAuth, (req, res) => {
   const role = projectRole(req.params.id, req.user);
   if (!role) return res.status(404).json({ error: "Project not found" });
-  const project = db.prepare("SELECT id, name, owner_id as ownerId, created_at as createdAt FROM projects WHERE id = ?").get(req.params.id);
+  const project = db.prepare("SELECT id, name, owner_id as ownerId, created_at as createdAt, tags FROM projects WHERE id = ?").get(req.params.id);
   if (!project) return res.status(404).json({ error: "Project not found" });
   const dataRow = db.prepare("SELECT data, updated_at as updatedAt FROM project_data WHERE project_id = ?").get(req.params.id);
   const members = db
@@ -237,6 +261,7 @@ app.get("/api/projects/:id", requireAuth, (req, res) => {
     .all(req.params.id);
   res.json({
     ...project,
+    tags: parseTags(project.tags),
     role,
     members: members.map((m) => ({ ...m, isPo: !!m.isPo })),
     data: JSON.parse(dataRow.data),
@@ -326,6 +351,316 @@ app.post("/api/projects/:id/members/:userId/demote", requireAuth, (req, res) => 
   db.prepare("UPDATE project_members SET is_po = 0 WHERE project_id = ? AND user_id = ?").run(req.params.id, req.params.userId);
   broadcast(req.params.id, { type: "members-changed" }, null);
   res.json({ ok: true });
+});
+
+// ---- Shared tag list ----
+//
+// One reusable set of labels (name + color) that projects pick from, rather than each
+// project inventing its own free text — rename or recolor a tag once and it updates
+// everywhere it's used. Creating/renaming/deleting the list itself is gated behind the
+// same trust level as creating a project; any member can still pick from the list for a
+// project they have access to (see PATCH /api/projects/:id/tags above).
+app.get("/api/tags", requireAuth, (req, res) => {
+  const rows = db.prepare("SELECT id, name, color FROM tags ORDER BY name").all();
+  res.json(rows);
+});
+
+app.post("/api/tags", requireAuth, (req, res) => {
+  if (!req.user.isAdmin && !req.user.canCreateProjects) return res.status(403).json({ error: "You don't have permission to manage tags. Ask an admin to grant it." });
+  const { name, color } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: "Tag name required" });
+  if (!color || typeof color !== "string") return res.status(400).json({ error: "Tag color required" });
+  const trimmed = name.trim();
+  const existing = db.prepare("SELECT id FROM tags WHERE name = ? COLLATE NOCASE").get(trimmed);
+  if (existing) return res.status(409).json({ error: `A tag named "${trimmed}" already exists` });
+  const id = crypto.randomUUID();
+  db.prepare("INSERT INTO tags (id, name, color, created_at) VALUES (?, ?, ?, ?)").run(id, trimmed, color, now());
+  res.json({ id, name: trimmed, color });
+});
+
+app.patch("/api/tags/:id", requireAuth, (req, res) => {
+  if (!req.user.isAdmin && !req.user.canCreateProjects) return res.status(403).json({ error: "You don't have permission to manage tags. Ask an admin to grant it." });
+  const tag = db.prepare("SELECT * FROM tags WHERE id = ?").get(req.params.id);
+  if (!tag) return res.status(404).json({ error: "Tag not found" });
+  const { name, color } = req.body || {};
+  if (name !== undefined) {
+    if (!name.trim()) return res.status(400).json({ error: "Tag name required" });
+    const trimmed = name.trim();
+    const clash = db.prepare("SELECT id FROM tags WHERE name = ? COLLATE NOCASE AND id != ?").get(trimmed, req.params.id);
+    if (clash) return res.status(409).json({ error: `A tag named "${trimmed}" already exists` });
+    db.prepare("UPDATE tags SET name = ? WHERE id = ?").run(trimmed, req.params.id);
+  }
+  if (color !== undefined) db.prepare("UPDATE tags SET color = ? WHERE id = ?").run(color, req.params.id);
+  const updated = db.prepare("SELECT id, name, color FROM tags WHERE id = ?").get(req.params.id);
+  res.json(updated);
+});
+
+app.delete("/api/tags/:id", requireAuth, (req, res) => {
+  if (!req.user.isAdmin && !req.user.canCreateProjects) return res.status(403).json({ error: "You don't have permission to manage tags. Ask an admin to grant it." });
+  db.prepare("DELETE FROM tags WHERE id = ?").run(req.params.id);
+  // Strip the deleted id from every project that had it — a project's tag list should
+  // never reference a tag that no longer exists.
+  const rows = db.prepare("SELECT id, tags FROM projects WHERE tags LIKE ?").all(`%${req.params.id}%`);
+  const update = db.prepare("UPDATE projects SET tags = ? WHERE id = ?");
+  for (const row of rows) {
+    const remaining = parseTags(row.tags).filter((t) => t !== req.params.id);
+    update.run(JSON.stringify(remaining), row.id);
+  }
+  res.json({ ok: true });
+});
+
+// ---- Cross-project planning: "Today" focus list + user-created "Release" lists ----
+//
+// A focus list (day or release) never stores task content itself — just
+// (project_id, task_id) pointers into whichever project actually owns that
+// task. Resolving a list re-reads each referenced project's live JSON blob,
+// so status/name edits made from inside the project show up here for free,
+// and a task deleted or a project the user lost access to simply drops out
+// (and its dangling pointer row is cleaned up) rather than erroring.
+
+function accessibleProjectIds(user) {
+  if (user.isAdmin) return db.prepare("SELECT id FROM projects").all().map((p) => p.id);
+  return db.prepare("SELECT project_id as id FROM project_members WHERE user_id = ?").all(user.id).map((p) => p.id);
+}
+
+function findTask(data, taskId) {
+  return data?.tasks?.find((t) => t.id === taskId) || null;
+}
+
+function resolveFocusList(list, user) {
+  const items = db.prepare("SELECT * FROM focus_items WHERE list_id = ? ORDER BY position, added_at").all(list.id);
+  const resolved = [];
+  for (const item of items) {
+    if (!projectRole(item.project_id, user)) {
+      db.prepare("DELETE FROM focus_items WHERE id = ?").run(item.id);
+      continue;
+    }
+    const project = db.prepare("SELECT name FROM projects WHERE id = ?").get(item.project_id);
+    const data = getProjectData(item.project_id);
+    const task = data && findTask(data, item.task_id);
+    if (!project || !task) {
+      db.prepare("DELETE FROM focus_items WHERE id = ?").run(item.id);
+      continue;
+    }
+    const milestone = data.milestones.find((m) => m.id === task.milestoneId);
+    resolved.push({
+      itemId: item.id,
+      projectId: item.project_id,
+      projectName: project.name,
+      taskId: task.id,
+      taskName: task.name,
+      status: task.status,
+      milestoneName: milestone?.name || null,
+      estimateDays: task.estimateDays,
+      addedAt: item.added_at,
+      // The project's own committed release date (not per-task) — lets the planner flag
+      // items whose project is due soon/overdue without duplicating that date per task.
+      projectTargetDate: data.project.targetReleaseDate || null,
+    });
+  }
+  return {
+    id: list.id,
+    kind: list.kind,
+    title: list.title,
+    targetDate: list.target_date,
+    createdAt: list.created_at,
+    items: resolved,
+  };
+}
+
+app.get("/api/focus/today", requireAuth, (req, res) => {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : now().slice(0, 10);
+  let list = db.prepare("SELECT * FROM focus_lists WHERE owner_id = ? AND kind = 'day' AND target_date = ?").get(req.user.id, date);
+  if (!list) {
+    const id = crypto.randomUUID();
+    db.prepare("INSERT INTO focus_lists (id, owner_id, kind, title, target_date, created_at) VALUES (?, ?, 'day', ?, ?, ?)").run(
+      id,
+      req.user.id,
+      `Today — ${date}`,
+      date,
+      now(),
+    );
+    list = db.prepare("SELECT * FROM focus_lists WHERE id = ?").get(id);
+  }
+  res.json(resolveFocusList(list, req.user));
+});
+
+app.get("/api/focus/lists", requireAuth, (req, res) => {
+  const rows = db
+    .prepare("SELECT * FROM focus_lists WHERE owner_id = ? AND kind = 'release' ORDER BY (target_date IS NULL), target_date, created_at DESC")
+    .all(req.user.id);
+  res.json(
+    rows.map((r) => {
+      const { items } = resolveFocusList(r, req.user);
+      return {
+        id: r.id,
+        title: r.title,
+        targetDate: r.target_date,
+        createdAt: r.created_at,
+        itemCount: items.length,
+        doneCount: items.filter((i) => i.status === "done").length,
+      };
+    }),
+  );
+});
+
+app.post("/api/focus/lists", requireAuth, (req, res) => {
+  const { title, targetDate } = req.body || {};
+  if (!title || !title.trim()) return res.status(400).json({ error: "Title required" });
+  const id = crypto.randomUUID();
+  db.prepare("INSERT INTO focus_lists (id, owner_id, kind, title, target_date, created_at) VALUES (?, ?, 'release', ?, ?, ?)").run(
+    id,
+    req.user.id,
+    title.trim(),
+    targetDate || null,
+    now(),
+  );
+  const list = db.prepare("SELECT * FROM focus_lists WHERE id = ?").get(id);
+  res.json(resolveFocusList(list, req.user));
+});
+
+function ownedList(id, user, kind) {
+  const list = db.prepare("SELECT * FROM focus_lists WHERE id = ?").get(id);
+  if (!list || list.owner_id !== user.id) return null;
+  if (kind && list.kind !== kind) return null;
+  return list;
+}
+
+app.get("/api/focus/lists/:id", requireAuth, (req, res) => {
+  const list = ownedList(req.params.id, req.user);
+  if (!list) return res.status(404).json({ error: "List not found" });
+  res.json(resolveFocusList(list, req.user));
+});
+
+app.patch("/api/focus/lists/:id", requireAuth, (req, res) => {
+  const list = ownedList(req.params.id, req.user, "release");
+  if (!list) return res.status(404).json({ error: "List not found" });
+  const { title, targetDate } = req.body || {};
+  if (title !== undefined) db.prepare("UPDATE focus_lists SET title = ? WHERE id = ?").run(title.trim(), list.id);
+  if (targetDate !== undefined) db.prepare("UPDATE focus_lists SET target_date = ? WHERE id = ?").run(targetDate || null, list.id);
+  res.json(resolveFocusList(db.prepare("SELECT * FROM focus_lists WHERE id = ?").get(list.id), req.user));
+});
+
+app.delete("/api/focus/lists/:id", requireAuth, (req, res) => {
+  const list = ownedList(req.params.id, req.user, "release");
+  if (!list) return res.status(404).json({ error: "List not found" });
+  db.prepare("DELETE FROM focus_lists WHERE id = ?").run(list.id);
+  res.json({ ok: true });
+});
+
+app.post("/api/focus/lists/:id/items", requireAuth, (req, res) => {
+  const list = ownedList(req.params.id, req.user);
+  if (!list) return res.status(404).json({ error: "List not found" });
+  const { projectId, taskId } = req.body || {};
+  if (!projectId || !taskId) return res.status(400).json({ error: "projectId and taskId required" });
+  if (!projectRole(projectId, req.user)) return res.status(404).json({ error: "Project not found" });
+  const data = getProjectData(projectId);
+  if (!data || !findTask(data, taskId)) return res.status(404).json({ error: "Task not found" });
+  const id = crypto.randomUUID();
+  const maxPosition = db.prepare("SELECT MAX(position) as m FROM focus_items WHERE list_id = ?").get(list.id).m || 0;
+  db.prepare("INSERT OR IGNORE INTO focus_items (id, list_id, project_id, task_id, added_at, position) VALUES (?, ?, ?, ?, ?, ?)").run(
+    id,
+    list.id,
+    projectId,
+    taskId,
+    now(),
+    maxPosition + 1000,
+  );
+  res.json(resolveFocusList(db.prepare("SELECT * FROM focus_lists WHERE id = ?").get(list.id), req.user));
+});
+
+app.delete("/api/focus/lists/:id/items/:itemId", requireAuth, (req, res) => {
+  const list = ownedList(req.params.id, req.user);
+  if (!list) return res.status(404).json({ error: "List not found" });
+  db.prepare("DELETE FROM focus_items WHERE id = ? AND list_id = ?").run(req.params.itemId, list.id);
+  res.json(resolveFocusList(db.prepare("SELECT * FROM focus_lists WHERE id = ?").get(list.id), req.user));
+});
+
+// Lets the planner's drag-to-reorder UI persist a new item order within one list —
+// the client sends the full item-id order after a drop, and rows are renumbered by
+// index so a stale/partial payload can never scramble the list.
+app.post("/api/focus/lists/:id/items/reorder", requireAuth, (req, res) => {
+  const list = ownedList(req.params.id, req.user);
+  if (!list) return res.status(404).json({ error: "List not found" });
+  const { itemIds } = req.body || {};
+  if (!Array.isArray(itemIds)) return res.status(400).json({ error: "itemIds required" });
+  const existingIds = db.prepare("SELECT id FROM focus_items WHERE list_id = ?").all(list.id).map((r) => r.id);
+  const existingSet = new Set(existingIds);
+  const ordered = itemIds.filter((id) => existingSet.has(id));
+  for (const id of existingIds) if (!ordered.includes(id)) ordered.push(id);
+  const setPosition = db.prepare("UPDATE focus_items SET position = ? WHERE id = ? AND list_id = ?");
+  ordered.forEach((id, i) => setPosition.run((i + 1) * 1000, id, list.id));
+  res.json(resolveFocusList(db.prepare("SELECT * FROM focus_lists WHERE id = ?").get(list.id), req.user));
+});
+
+// Marks the underlying task done (or back to not-started) directly from a focus
+// list, without having to open its project — edits that project's own data, the
+// same as any other task edit, so Timeline/Dashboard/etc there stay in sync.
+app.post("/api/focus/lists/:id/items/:itemId/toggle-done", requireAuth, (req, res) => {
+  const list = ownedList(req.params.id, req.user);
+  if (!list) return res.status(404).json({ error: "List not found" });
+  const item = db.prepare("SELECT * FROM focus_items WHERE id = ? AND list_id = ?").get(req.params.itemId, list.id);
+  if (!item) return res.status(404).json({ error: "Item not found" });
+  if (!projectRole(item.project_id, req.user)) return res.status(404).json({ error: "Project not found" });
+  const data = getProjectData(item.project_id);
+  const task = data && findTask(data, item.task_id);
+  if (!data || !task) return res.status(404).json({ error: "Task not found" });
+  const nextStatus = task.status === "done" ? "not_started" : "done";
+  const nextData = { ...data, tasks: data.tasks.map((t) => (t.id === task.id ? { ...t, status: nextStatus } : t)) };
+  saveProjectData(item.project_id, nextData, req.user.id);
+  broadcast(item.project_id, { type: "data-changed", by: req.user.id, at: now() }, req.user.id);
+  res.json(resolveFocusList(list, req.user));
+});
+
+// Feeds the planner's drag-and-drop task browser: every open task across every
+// project the user can see, grouped by project so the panel can render one
+// collapsible section per project instead of a flat list.
+app.get("/api/focus/all-tasks", requireAuth, (req, res) => {
+  const projectIds = accessibleProjectIds(req.user);
+  const groups = [];
+  for (const projectId of projectIds) {
+    const project = db.prepare("SELECT name FROM projects WHERE id = ?").get(projectId);
+    const data = getProjectData(projectId);
+    if (!project || !data) continue;
+    // Status filtering (e.g. skipping done/not_pursuing) is done client-side so the
+    // browse panel's filter chips can toggle any status without another round trip.
+    const tasks = data.tasks.map((task) => {
+      const milestone = data.milestones.find((m) => m.id === task.milestoneId);
+      return { taskId: task.id, taskName: task.name, status: task.status, milestoneName: milestone?.name || null };
+    });
+    if (tasks.length) groups.push({ projectId, projectName: project.name, tasks });
+  }
+  groups.sort((a, b) => a.projectName.localeCompare(b.projectName));
+  res.json(groups);
+});
+
+// Lets the planner's "add a task" picker search across every project the user
+// can see, so a day or release list can pull in tasks from any of them.
+app.get("/api/focus/search-tasks", requireAuth, (req, res) => {
+  const q = (req.query.q || "").toString().trim().toLowerCase();
+  const projectIds = accessibleProjectIds(req.user);
+  const results = [];
+  for (const projectId of projectIds) {
+    const project = db.prepare("SELECT name FROM projects WHERE id = ?").get(projectId);
+    const data = getProjectData(projectId);
+    if (!project || !data) continue;
+    for (const task of data.tasks) {
+      if (task.status === "done" || task.status === "not_pursuing") continue;
+      if (q && !task.name.toLowerCase().includes(q)) continue;
+      const milestone = data.milestones.find((m) => m.id === task.milestoneId);
+      results.push({
+        projectId,
+        projectName: project.name,
+        taskId: task.id,
+        taskName: task.name,
+        status: task.status,
+        milestoneName: milestone?.name || null,
+      });
+      if (results.length >= 40) break;
+    }
+    if (results.length >= 40) break;
+  }
+  res.json(results);
 });
 
 // ---- Admin: user lifecycle ----
