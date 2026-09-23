@@ -15,7 +15,16 @@ export interface ProjectSummary {
   name: string;
   ownerId: string;
   createdAt: string;
+  /** IDs into the shared Tag list (see `Tag`) — resolve against `api.tags.list()` to get name/color. */
+  tags: string[];
   role: ProjectRole;
+}
+
+/** A reusable label in the shared, cross-project tag list (managed from "Manage Tags"). */
+export interface Tag {
+  id: string;
+  name: string;
+  color: string;
 }
 
 export interface ProjectMember {
@@ -60,6 +69,60 @@ export interface AdminProjectSummary {
   createdAt: string;
   memberCount: number;
   owners: AdminProjectOwner[];
+}
+
+export interface FocusTask {
+  itemId: string;
+  projectId: string;
+  projectName: string;
+  taskId: string;
+  taskName: string;
+  status: string;
+  milestoneName: string | null;
+  estimateDays: number;
+  addedAt: string;
+  /** The task's project's own committed release date (ProjectInfo.targetReleaseDate), if set. */
+  projectTargetDate: string | null;
+}
+
+export interface FocusList {
+  id: string;
+  kind: "day" | "release";
+  title: string;
+  targetDate: string | null;
+  createdAt: string;
+  items: FocusTask[];
+}
+
+export interface FocusListSummary {
+  id: string;
+  title: string;
+  targetDate: string | null;
+  createdAt: string;
+  itemCount: number;
+  doneCount: number;
+}
+
+export interface FocusSearchResult {
+  projectId: string;
+  projectName: string;
+  taskId: string;
+  taskName: string;
+  status: string;
+  milestoneName: string | null;
+}
+
+export interface BrowseTask {
+  taskId: string;
+  taskName: string;
+  status: string;
+  milestoneName: string | null;
+}
+
+export interface ProjectTaskGroup {
+  projectId: string;
+  projectName: string;
+  tasks: BrowseTask[];
 }
 
 export type WsMessage =
