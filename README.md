@@ -85,6 +85,16 @@ Then open `http://localhost:3001` — the first visitor sets up the admin accoun
 
 On Windows, double-click `run.bat` instead. It installs dependencies and builds only if they are missing, then starts the server. It doesn't rebuild once `dist/` exists, so run `npm run build` yourself after frontend changes.
 
+### With Docker
+
+Only Docker is needed, no Node install:
+
+```bash
+docker compose up -d --build
+```
+
+Then open `http://localhost:3001`. The database is kept in the `nigraan-data` volume, so it survives restarts and rebuilds. After pulling changes, run the same command again to rebuild. For a backup, run `docker compose exec nigraan node server/scripts/backup.js`. It writes to `/data/backups` inside the volume.
+
 ### Configuration
 
 No `.env` is needed. These optional environment variables are available:
