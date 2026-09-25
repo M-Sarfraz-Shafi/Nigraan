@@ -1,0 +1,12 @@
+services:
+  nigraan:
+    build: .
+    image: nigraan
+    ports:
+      - "3001:3001"
+    volumes:
+      - nigraan-data:/data
+    restart: unless-stopped
+
+volumes:
+  nigraan-data:
