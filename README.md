@@ -53,6 +53,25 @@ A self-hosted project management and Gantt-scheduling app for small teams who wa
 - WebSocket-backed presence indicators and "editing" badges show who's looking at what, live
 - Full undo/redo history on every edit
 
+### Today & Priorities — plan across every project
+
+One screen (from the projects list) for deciding what to work on, without opening each project.
+
+- **Today list**: a personal list per calendar day, created automatically the first time you open it. Drag in tasks from any project, tick them done, and reorder by dragging
+- **Releases**: named lists with an optional target date that bundle tasks from several projects toward one deadline. Each shows done/total, a percent-complete badge, and a due or overdue label
+- **All Tasks panel**: every task you can see, grouped by project, with a text filter and status filter chips (done and not-pursuing are hidden by default). The panel is collapsible and resizable
+- Ticking a task done here updates the task in its own project, live for everyone viewing it
+- Items whose project release date is within a week, or already past, get a due badge
+- **Copy for standup**: copies today's plan as a plain-text checklist
+- Lists only point at tasks, so no task data is duplicated. A task that is deleted, or that you lose access to, drops off the list
+
+### Project tags
+
+- One shared list of colored tags (name + color) that every project picks from. Rename or recolor a tag once and every project using it updates
+- **Manage Tags** creates, renames, recolors, and deletes tags. It needs admin or project-creation rights, and deleting a tag removes it from every project
+- Any project member can assign tags from the project card. Tags also show in the project sidebar
+- Filter the projects list by one or more tags. Your filter is remembered in this browser
+
 ## Running it
 
 ```bash
@@ -63,6 +82,19 @@ npm run server
 ```
 
 Then open `http://localhost:3001` — the first visitor sets up the admin account, no server access needed.
+
+On Windows, double-click `run.bat` instead. It installs dependencies and builds only if they are missing, then starts the server. It doesn't rebuild once `dist/` exists, so run `npm run build` yourself after frontend changes.
+
+### Configuration
+
+No `.env` is needed. These optional environment variables are available:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `3001` | Server port |
+| `PM_DB_PATH` | `server/data.db` | SQLite database file |
+| `PM_COOKIE_SECURE` | off | Set to `1` in production over HTTPS to mark session cookies `Secure` |
+| `PM_BACKUP_DIR` | `server/backups` | Output folder for `server/scripts/backup.js` |
 
 For running it on a shared machine (LAN or beyond), see [progress.md](progress.md) for the full build history and architecture notes.
 
